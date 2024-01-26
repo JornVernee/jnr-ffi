@@ -15,6 +15,43 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/*
+ * Copyright (c) 2024  Oracle and/or its affiliates.
+ *
+ * The Universal Permissive License (UPL), Version 1.0
+ *
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or data
+ * (collectively the "Software"), free of charge and under any and all copyright
+ * rights in the Software, and any and all patent rights owned or freely
+ * licensable by each licensor hereunder covering either (i) the unmodified
+ * Software as contributed to or provided by such licensor, or (ii) the Larger
+ * Works (as defined below), to deal in both
+ *
+ * (a) the Software, and
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software (each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ * The above copyright notice and either this complete permission notice or at
+ * a minimum a reference to the UPL must be included in all copies or
+ * substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
 
 
 package jnr.ffi.provider.jffi;
@@ -22,6 +59,29 @@ package jnr.ffi.provider.jffi;
 import com.kenai.jffi.Function;
 
 import jnr.ffi.annotations.Variadic;
+import jnr.ffi.provider.jffi.AbstractAsmLibraryInterface;
+import jnr.ffi.provider.jffi.AsmBuilder;
+import jnr.ffi.provider.jffi.AsmClassLoader;
+import jnr.ffi.provider.jffi.AsmRuntime;
+import jnr.ffi.provider.jffi.AsmUtil;
+import jnr.ffi.provider.jffi.BufferMethodGenerator;
+import jnr.ffi.provider.jffi.DefaultInvokerFactory;
+import jnr.ffi.provider.jffi.FastIntMethodGenerator;
+import jnr.ffi.provider.jffi.FastLongMethodGenerator;
+import jnr.ffi.provider.jffi.FastNumericMethodGenerator;
+import jnr.ffi.provider.jffi.MethodGenerator;
+import jnr.ffi.provider.jffi.NativeFunctionMapperContext;
+import jnr.ffi.provider.jffi.NativeLibrary;
+import jnr.ffi.provider.jffi.NativeRuntime;
+import jnr.ffi.provider.jffi.NoTrace;
+import jnr.ffi.provider.jffi.NoX86;
+import jnr.ffi.provider.jffi.NotImplMethodGenerator;
+import jnr.ffi.provider.jffi.PanamaMethodGenerator;
+import jnr.ffi.provider.jffi.SkinnyMethodAdapter;
+import jnr.ffi.provider.jffi.StubCompiler;
+import jnr.ffi.provider.jffi.SymbolNotFoundError;
+import jnr.ffi.provider.jffi.VariableAccessorGenerator;
+import jnr.ffi.provider.jffi.X86MethodGenerator;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.ClassWriter;
@@ -64,10 +124,11 @@ import static org.objectweb.asm.Opcodes.ACC_FINAL;
 import static org.objectweb.asm.Opcodes.ACC_PRIVATE;
 import static org.objectweb.asm.Opcodes.ACC_PUBLIC;
 import static org.objectweb.asm.Opcodes.ACC_STATIC;
-import static org.objectweb.asm.Opcodes.V1_8;
+import static org.objectweb.asm.Opcodes.V21;
 
 public class AsmLibraryLoader extends LibraryLoader {
     public final static boolean DEBUG = Boolean.getBoolean("jnr.ffi.compile.dump");
+    public final static boolean CLASS_CHECKS = Boolean.getBoolean("jnr.ffi.compile.checks");
     private static final AtomicLong nextClassID = new AtomicLong(0);
     private static final AtomicLong uniqueId = new AtomicLong(0);
     private static final ThreadLocal<AsmClassLoader> classLoader = new ThreadLocal<AsmClassLoader>();
@@ -95,11 +156,11 @@ public class AsmLibraryLoader extends LibraryLoader {
 
         boolean debug = DEBUG && !interfaceClass.isAnnotationPresent(NoTrace.class);
         ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES);
-        ClassVisitor cv = debug ? AsmUtil.newCheckClassAdapter(cw) : cw;
+        ClassVisitor cv = CLASS_CHECKS ? AsmUtil.newCheckClassAdapter(cw) : cw;
 
         AsmBuilder builder = new AsmBuilder(runtime, p(interfaceClass) + "$jnr$ffi$" + nextClassID.getAndIncrement(), cv, classLoader);
 
-        cv.visit(V1_8, ACC_PUBLIC | ACC_FINAL, builder.getClassNamePath(), null, p(AbstractAsmLibraryInterface.class),
+        cv.visit(V21, ACC_PUBLIC | ACC_FINAL, builder.getClassNamePath(), null, p(AbstractAsmLibraryInterface.class),
                 new String[]{p(interfaceClass)});
 
         FunctionMapper functionMapper = libraryOptions.containsKey(LibraryOption.FunctionMapper)
@@ -115,6 +176,7 @@ public class AsmLibraryLoader extends LibraryLoader {
         StubCompiler compiler = StubCompiler.newCompiler(runtime);
 
         final MethodGenerator[] generators = {
+                new PanamaMethodGenerator(),
                 !interfaceClass.isAnnotationPresent(NoX86.class)
                     ? new X86MethodGenerator(compiler) : new NotImplMethodGenerator(),
                 new FastIntMethodGenerator(),
@@ -122,7 +184,7 @@ public class AsmLibraryLoader extends LibraryLoader {
                 new FastNumericMethodGenerator(),
                 new BufferMethodGenerator()
         };
-        
+
         DefaultInvokerFactory invokerFactory = new DefaultInvokerFactory(runtime, library, typeMapper, functionMapper, libraryCallingConvention, libraryOptions, interfaceClass.isAnnotationPresent(Synchronized.class));
         InterfaceScanner scanner = new InterfaceScanner(interfaceClass, typeMapper, libraryCallingConvention);
 
@@ -139,7 +201,7 @@ public class AsmLibraryLoader extends LibraryLoader {
 
             try {
                 long functionAddress = library.findSymbolAddress(functionName);
-                
+
                 FromNativeContext resultContext = new MethodResultContext(runtime, method);
                 SignatureType signatureType = DefaultSignatureType.create(method.getReturnType(), resultContext);
                 ResultType resultType = getResultType(runtime, method.getReturnType(),
@@ -150,7 +212,7 @@ public class AsmLibraryLoader extends LibraryLoader {
 
                 boolean saveError = jnr.ffi.LibraryLoader.saveError(libraryOptions, function.hasSaveError(), function.hasIgnoreError());
 
-                Function jffiFunction = new Function(functionAddress, 
+                Function jffiFunction = new Function(functionAddress,
                         getCallContext(resultType, parameterTypes,function.convention(), saveError));
 
                 for (MethodGenerator g : generators) {
@@ -163,7 +225,7 @@ public class AsmLibraryLoader extends LibraryLoader {
             } catch (SymbolNotFoundError ex) {
                 String errorFieldName = "error_" + uniqueId.incrementAndGet();
                 cv.visitField(ACC_PRIVATE | ACC_FINAL | ACC_STATIC, errorFieldName, ci(String.class), null, ex.getMessage());
-                generateFunctionNotFound(cv, builder.getClassNamePath(), errorFieldName, functionName, 
+                generateFunctionNotFound(cv, builder.getClassNamePath(), errorFieldName, functionName,
                         method.getReturnType(), method.getParameterTypes());
             }
         }
@@ -256,11 +318,11 @@ public class AsmLibraryLoader extends LibraryLoader {
 
         //Push ref to this
         mv.aload(0);
-        
+
         //Construct the params array
         mv.pushInt(parameterTypes.length);
         mv.anewarray(p(Object.class));
-        
+
         int slot = 1;
         for (int i = 0; i < parameterTypes.length; i++) {
             mv.dup();
@@ -301,10 +363,10 @@ public class AsmLibraryLoader extends LibraryLoader {
             mv.aastore();
             slot++;
         }
-        
+
         // call invoker(this, parameters)
         mv.invokeinterface(jnr.ffi.provider.Invoker.class, "invoke", Object.class, Object.class, Object[].class);
-        
+
         Class<?> returnType = m.getReturnType();
         if (returnType.equals(long.class)) {
             mv.checkcast(Long.class);
@@ -344,7 +406,7 @@ public class AsmLibraryLoader extends LibraryLoader {
             mv.checkcast(m.getReturnType());
             mv.areturn();
         }
-        
+
         mv.visitMaxs(100, AsmUtil.calculateLocalVariableSpace(parameterTypes) + 1);
         mv.visitEnd();
     }

@@ -15,18 +15,67 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/*
+ * Copyright (c) 2024  Oracle and/or its affiliates.
+ *
+ * The Universal Permissive License (UPL), Version 1.0
+ *
+ * Subject to the condition set forth below, permission is hereby granted to any
+ * person obtaining a copy of this software, associated documentation and/or data
+ * (collectively the "Software"), free of charge and under any and all copyright
+ * rights in the Software, and any and all patent rights owned or freely
+ * licensable by each licensor hereunder covering either (i) the unmodified
+ * Software as contributed to or provided by such licensor, or (ii) the Larger
+ * Works (as defined below), to deal in both
+ *
+ * (a) the Software, and
+ * (b) any piece of software and/or hardware listed in the lrgrwrks.txt file if
+ * one is included with the Software (each a "Larger Work" to which the Software
+ * is contributed by such licensors),
+ *
+ * without restriction, including without limitation the rights to copy, create
+ * derivative works of, display, perform, and distribute the Software and make,
+ * use, sell, offer for sale, import, export, have made, and have sold the
+ * Software and the Larger Work(s), and to sublicense the foregoing rights on
+ * either these or other terms.
+ *
+ * This license is subject to the following condition:
+ * The above copyright notice and either this complete permission notice or at
+ * a minimum a reference to the UPL must be included in all copies or
+ * substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
 
 package jnr.ffi.provider.jffi;
 
 import com.kenai.jffi.CallContext;
 import com.kenai.jffi.Function;
 import com.kenai.jffi.HeapInvocationBuffer;
+import com.kenai.jffi.Internals;
 import com.kenai.jffi.ObjectParameterType;
+import jdk.jfr.MemoryAddress;
 import jnr.ffi.Address;
 import jnr.ffi.Pointer;
+import jnr.ffi.Runtime;
+import jnr.ffi.byref.ByReference;
 import jnr.ffi.mapper.ToNativeContext;
 import jnr.ffi.mapper.ToNativeConverter;
 
+import java.lang.foreign.Arena;
+import java.lang.foreign.FunctionDescriptor;
+import java.lang.foreign.Linker;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.SegmentAllocator;
+import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
 import java.nio.Buffer;
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
@@ -35,6 +84,9 @@ import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
 import java.nio.ShortBuffer;
+import java.util.Collections;
+import java.util.Map;
+import java.util.WeakHashMap;
 
 /**
  * Utility methods that are used at runtime by generated code.
@@ -219,6 +271,140 @@ public final class AsmRuntime {
         try {
             postInvocation.postInvoke(j, n, context);
         } catch (Throwable t) {}
+    }
+
+    public static MethodHandle downcallHandle(MethodHandles.Lookup lookup, String name, Class<?> type, long addr, FunctionDescriptor descriptor) {
+        assert type == MethodHandle.class;
+        return Linker.nativeLinker().downcallHandle(MemorySegment.ofAddress(addr), descriptor);
+    }
+
+    public static boolean intToBool(int i) {
+        return i != 0;
+    }
+
+    public static MemorySegment ptrToAddr(SegmentAllocator allocator, Pointer ptr) {
+        if (ptr == null) {
+            return MemorySegment.NULL;
+        }
+        if (!ptr.isDirect()) {
+            MemorySegment segment = allocator.allocate(ptr.size());
+            for (long i = 0; i < ptr.size(); ++i) {
+                segment.set(ValueLayout.JAVA_BYTE, i, ptr.getByte(i));
+            }
+            return segment;
+        }
+        return MemorySegment.ofAddress(ptr.address());
+    }
+
+    public static void copyBackToPtr(MemorySegment segment, Pointer to) {
+        if (to == null || to.isDirect()) {
+            return; // not needed
+        }
+        for (long i = 0; i < to.size(); ++i) {
+            to.putByte(i, segment.get(ValueLayout.JAVA_BYTE, i));
+        }
+    }
+
+    public static MemorySegment bufferOffHeap(SegmentAllocator allocator, MemorySegment segment) {
+        if (!segment.isNative()) {
+            MemorySegment offHeap = allocator.allocate(segment.byteSize());
+            offHeap.copyFrom(segment);
+            segment = offHeap;
+        }
+        return segment;
+    }
+
+    public static void copyFromArray(MemorySegment segment, byte[] array) {
+        segment.copyFrom(MemorySegment.ofArray(array));
+    }
+    public static void copyFromArray(MemorySegment segment, short[] array) {
+        segment.copyFrom(MemorySegment.ofArray(array));
+    }
+    public static void copyFromArray(MemorySegment segment, char[] array) {
+        segment.copyFrom(MemorySegment.ofArray(array));
+    }
+    public static void copyFromArray(MemorySegment segment, int[] array) {
+        segment.copyFrom(MemorySegment.ofArray(array));
+    }
+    public static void copyFromArray(MemorySegment segment, long[] array) {
+        segment.copyFrom(MemorySegment.ofArray(array));
+    }
+    public static void copyFromArray(MemorySegment segment, float[] array) {
+        segment.copyFrom(MemorySegment.ofArray(array));
+    }
+    public static void copyFromArray(MemorySegment segment, double[] array) {
+        segment.copyFrom(MemorySegment.ofArray(array));
+    }
+
+    public static void copyToArray(MemorySegment segment, byte[] array) {
+        MemorySegment.ofArray(array).copyFrom(segment);
+    }
+    public static void copyToArray(MemorySegment segment, short[] array) {
+        MemorySegment.ofArray(array).copyFrom(segment);
+    }
+    public static void copyToArray(MemorySegment segment, char[] array) {
+        MemorySegment.ofArray(array).copyFrom(segment);
+    }
+    public static void copyToArray(MemorySegment segment, int[] array) {
+        MemorySegment.ofArray(array).copyFrom(segment);
+    }
+    public static void copyToArray(MemorySegment segment, long[] array) {
+        MemorySegment.ofArray(array).copyFrom(segment);
+    }
+    public static void copyToArray(MemorySegment segment, float[] array) {
+        MemorySegment.ofArray(array).copyFrom(segment);
+    }
+    public static void copyToArray(MemorySegment segment, double[] array) {
+        MemorySegment.ofArray(array).copyFrom(segment);
+    }
+
+    public static MemorySegment refToAddr(Runtime runtime, SegmentAllocator allocator, ByReference<?> ref) {
+        long size = ref.nativeSize(runtime);
+        return allocator.allocate(size);
+    }
+
+    public static void copyFromRef(Runtime runtime, MemorySegment seg, ByReference<?> ref) {
+        MemorySegmentPointer segPtr = new MemorySegmentPointer(runtime, seg);
+        ref.toNative(runtime, segPtr, 0);
+    }
+
+    public static void copyToRef(Runtime runtime, MemorySegment seg, ByReference<?> ref) {
+        MemorySegmentPointer segPtr = new MemorySegmentPointer(runtime, seg);
+        ref.fromNative(runtime, segPtr, 0);
+    }
+
+    public static void copyToBuffer(MemorySegment seg, Buffer buff) {
+        if (!buff.isDirect()) {
+            MemorySegment.ofBuffer(buff).copyFrom(seg);
+        }
+    }
+
+    static MethodHandle saveErrnoHandle() {
+        class Holder {
+            static final MethodHandle MH_SAVE_ERRNO;
+
+            static {
+                MemorySegment addr = MemorySegment.ofAddress(Internals.getErrnoSaveFunction());
+                FunctionDescriptor func = FunctionDescriptor.ofVoid();
+                MH_SAVE_ERRNO = Linker.nativeLinker().downcallHandle(addr, func);
+            }
+        }
+        return Holder.MH_SAVE_ERRNO;
+    }
+
+    public static void saveErrno() throws Throwable {
+        saveErrnoHandle().invokeExact();
+    }
+
+    // keep the same upcall stub per callback instance (required for JNR)
+    private static final Map<Object, MemorySegment> CACHE = Collections.synchronizedMap(new WeakHashMap<>());
+
+    public static MemorySegment bindCallback(Object callback, MethodHandle target, FunctionDescriptor descriptor) {
+        if (callback == null) {
+            return MemorySegment.NULL;
+        }
+        return CACHE.computeIfAbsent(callback, obj ->
+            Linker.nativeLinker().upcallStub(target.bindTo(callback), descriptor, Arena.ofAuto()));
     }
 
 }
