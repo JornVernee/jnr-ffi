@@ -191,16 +191,12 @@ public class MemorySegmentPointer extends AbstractMemoryIO {
 
     @Override
     public String getString(long offset, int maxLength, Charset cs) {
-        if (cs != StandardCharsets.UTF_8)
-            throw new UnsupportedOperationException("No string length for arbitrary charset");
-        return getString(offset);
+        return segment.asSlice(offset, maxLength).getString(0, cs);
     }
 
     @Override
     public void putString(long offset, String string, int maxLength, Charset cs) {
-        if (cs != StandardCharsets.UTF_8)
-            throw new UnsupportedOperationException("No string length for arbitrary charset");
-        segment.setString(offset, string);
+        segment.asSlice(offset, maxLength).setString(0, string, cs);
     }
 
     @Override
